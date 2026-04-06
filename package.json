@@ -1,0 +1,56 @@
+{
+  "name": "geoscholar-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local MCP server for multi-source geoscience literature search and compliant download workflows.",
+  "homepage": "https://github.com/luskB/GeoSchlor-MCP",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luskB/GeoSchlor-MCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/luskB/GeoSchlor-MCP/issues"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "auth": "tsx src/cli/auth.ts",
+    "auth:cnki": "tsx src/cli/auth.ts cnki",
+    "auth:geophysics": "tsx src/cli/auth.ts geophysics",
+    "auth:wanfang": "tsx src/cli/auth.ts wanfang",
+    "auth:vip": "tsx src/cli/auth.ts vip"
+  },
+  "keywords": [
+    "mcp",
+    "geoscience",
+    "geophysics",
+    "petrophysics",
+    "onepetro",
+    "wanfang",
+    "vip",
+    "literature-search",
+    "academic-search",
+    "download"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "cheerio": "^1.1.2",
+    "dotenv": "^17.2.3",
+    "p-queue": "^8.1.0",
+    "playwright": "^1.54.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
