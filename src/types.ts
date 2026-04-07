@@ -3,6 +3,11 @@ export type SourceId =
   | "geophysics"
   | "petrophysics"
   | "onepetro"
+  | "spe"
+  | "spwla"
+  | "eage"
+  | "aapg"
+  | "openalex"
   | "wanfang"
   | "vip";
 

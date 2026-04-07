@@ -3,6 +3,7 @@ import {
   buildCnkiBriefGridForm,
   buildCnkiSearchCacheKey,
   buildCnkiSearchUrl,
+  getCnkiSearchLanguages,
   parseCnkiDetailHtml,
   parseCnkiSearchHtml
 } from "../src/providers/cnki-provider.js";
@@ -24,6 +25,20 @@ describe("CnkiProvider helpers", () => {
     expect(url).toContain("fd=TI");
   });
 
+  it("falls back to CJFQ when CNKI resourceCode is blank", () => {
+    const url = buildCnkiSearchUrl({
+      source: "cnki",
+      query: "Kai Zhang",
+      mode: "author",
+      maxResults: 10,
+      filters: {
+        resourceCode: ""
+      }
+    });
+
+    expect(url).toContain("rc=CJFQ");
+  });
+
   it("builds a cache key that varies with the auth state version", () => {
     const request = {
       source: "cnki" as const,
@@ -39,7 +54,7 @@ describe("CnkiProvider helpers", () => {
     const b = buildCnkiSearchCacheKey(request, "state-b", "auto");
 
     expect(a).not.toBe(b);
-    expect(a).toContain("cnki-search-v3");
+    expect(a).toContain("cnki-search-v5");
   });
 
   it("builds a brief grid form for protocol search", () => {
@@ -55,6 +70,30 @@ describe("CnkiProvider helpers", () => {
     expect(form.aside).toContain("地震");
     expect(form.QueryJson).toContain("\"Classid\":\"YSTT4HG0\"");
     expect(form.QueryJson).toContain("\"Field\":\"SU\"");
+  });
+
+  it("uses mixed-language protocol candidates for English CNKI queries", () => {
+    expect(
+      getCnkiSearchLanguages({
+        source: "cnki",
+        query: "well logging",
+        mode: "keyword",
+        maxResults: 5,
+        filters: {}
+      })
+    ).toEqual(["", "Both"]);
+  });
+
+  it("keeps Chinese-only protocol mode for Chinese CNKI queries", () => {
+    expect(
+      getCnkiSearchLanguages({
+        source: "cnki",
+        query: "\u6d4b\u4e95",
+        mode: "keyword",
+        maxResults: 5,
+        filters: {}
+      })
+    ).toEqual(["CHINESE"]);
   });
 
   it("parses a classic CNKI search result table", () => {

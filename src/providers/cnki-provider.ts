@@ -13,20 +13,23 @@ import {
   stripHtmlTags,
   uniqueList
 } from "../utils/text.js";
+import { summarizeError, writeDiagnosticLog } from "../utils/diagnostics.js";
 import { sha1 } from "../utils/hash.js";
 
-const CNKI_SEARCH_CACHE_VERSION = "cnki-search-v3";
+const CNKI_SEARCH_CACHE_VERSION = "cnki-search-v5";
 const CNKI_BRIEF_GRID_URL = "https://kns.cnki.net/kns8s/brief/grid";
 const CNKI_HTML_ACCEPT =
   "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8";
 const CNKI_AI_READER_LABEL = "CNKI AI\u9605\u8bfb";
 
 type CnkiTransport = "http" | "browser";
+export type CnkiSearchLanguage = "" | "CHINESE" | "Both";
 
 interface CnkiHtmlResponse {
   html: string;
   baseUrl: string;
   transport: CnkiTransport;
+  notes?: string[];
 }
 
 interface CnkiDownloadLink {
@@ -52,13 +55,17 @@ export class CnkiProvider implements SearchProvider {
       return cached;
     }
 
-    const { html, baseUrl, transport } = await fetchCnkiSearchHtml(request, context);
-    const items = parseCnkiSearchHtml(html, baseUrl).slice(0, request.maxResults);
+    const { html, baseUrl, transport, notes } = await fetchCnkiSearchHtml(request, context);
+    const items = rankCnkiSearchItems(request, parseCnkiSearchHtml(html, baseUrl)).slice(
+      0,
+      request.maxResults
+    );
     const result: ProviderSearchResult = {
       source: this.id,
       total: items.length,
       items,
       notes: [
+        ...(notes ?? []),
         transport === "http"
           ? "CNKI search used saved-session HTTP requests and avoided opening a visible browser page."
           : "CNKI search fell back to the browser flow after the protocol request was blocked.",
@@ -147,8 +154,9 @@ export class CnkiProvider implements SearchProvider {
 }
 
 export function buildCnkiSearchUrl(request: SearchRequest): string {
+  const resourceCode = normalizeWhitespace(request.filters?.resourceCode) || "CJFQ";
   const params = new URLSearchParams({
-    rc: request.filters?.resourceCode ?? "CJFQ",
+    rc: resourceCode,
     kw: request.query,
     rt: "journal",
     fd: cnkiFieldByMode(request.mode)
@@ -171,7 +179,8 @@ export function buildCnkiSearchCacheKey(
 
 export function buildCnkiBriefGridForm(
   classId: string,
-  request: SearchRequest
+  request: SearchRequest,
+  language: CnkiSearchLanguage = getCnkiSearchLanguages(request)[0] ?? "CHINESE"
 ): Record<string, string> {
   const field = cnkiFieldByMode(request.mode);
   const title = cnkiModeTitle(request.mode);
@@ -201,7 +210,7 @@ export function buildCnkiBriefGridForm(
     },
     ExScope: 1,
     SearchType: 2,
-    Rlang: "CHINESE",
+    Rlang: language,
     KuaKuCode: "",
     Expands: {},
     SearchFrom: 1
@@ -220,6 +229,30 @@ export function buildCnkiBriefGridForm(
     uniplatform: "",
     CurPage: "1"
   };
+}
+
+export function getCnkiSearchLanguages(request: SearchRequest): CnkiSearchLanguage[] {
+  const query = normalizeWhitespace(request.query);
+  if (!query) {
+    return ["CHINESE"];
+  }
+
+  if (request.mode === "doi") {
+    return [""];
+  }
+
+  const hasChinese = containsChinese(query);
+  const hasLatin = containsLatin(query);
+
+  if (hasLatin && !hasChinese) {
+    return ["", "Both"];
+  }
+
+  if (hasChinese && hasLatin) {
+    return ["Both", ""];
+  }
+
+  return ["CHINESE"];
 }
 
 export function parseCnkiSearchHtml(html: string, baseUrl: string): ArticleRecord[] {
@@ -386,6 +419,21 @@ async function fetchCnkiSearchHtml(
     try {
       return await fetchCnkiSearchHtmlWithRequest(request, context);
     } catch (error) {
+      await writeDiagnosticLog(context.config, {
+        scope: "cnki",
+        event: "search_http_failed",
+        message:
+          context.config.cnkiRuntimeMode === "http_only"
+            ? "CNKI protocol search failed in http_only mode."
+            : "CNKI protocol search failed; browser fallback will be attempted.",
+        details: {
+          query: request.query,
+          mode: request.mode,
+          maxResults: request.maxResults,
+          runtimeMode: context.config.cnkiRuntimeMode,
+          error: summarizeError(error)
+        }
+      });
       if (context.config.cnkiRuntimeMode === "http_only") {
         throw normalizeCnkiSearchError(error);
       }
@@ -395,7 +443,12 @@ async function fetchCnkiSearchHtml(
   return fetchCnkiHtmlWithBrowser(
     buildCnkiSearchUrl(request),
     context,
-    "CNKI returned a verification page. Save a browser session with `npm run auth:cnki` first."
+    "CNKI returned a verification page. Save a browser session with `npm run auth:cnki` first.",
+    {
+      stage: "search_results",
+      query: request.query,
+      mode: request.mode
+    }
   );
 }
 
@@ -407,6 +460,19 @@ async function fetchCnkiDetailHtml(
     try {
       return await fetchCnkiHtmlWithRequest(locator, context);
     } catch (error) {
+      await writeDiagnosticLog(context.config, {
+        scope: "cnki",
+        event: "detail_http_failed",
+        message:
+          context.config.cnkiRuntimeMode === "http_only"
+            ? "CNKI detail HTTP request failed in http_only mode."
+            : "CNKI detail HTTP request failed; browser fallback will be attempted.",
+        details: {
+          locator,
+          runtimeMode: context.config.cnkiRuntimeMode,
+          error: summarizeError(error)
+        }
+      });
       if (context.config.cnkiRuntimeMode === "http_only") {
         throw normalizeCnkiDetailError(error);
       }
@@ -416,7 +482,11 @@ async function fetchCnkiDetailHtml(
   return fetchCnkiHtmlWithBrowser(
     locator,
     context,
-    "CNKI detail page still requires verification. Refresh the saved CNKI browser session."
+    "CNKI detail page still requires verification. Refresh the saved CNKI browser session.",
+    {
+      stage: "detail_page",
+      locator
+    }
   );
 }
 
@@ -432,32 +502,96 @@ async function fetchCnkiSearchHtmlWithRequest(
     );
   }
 
-  const grid = await context.browser.requestWithSession("cnki", CNKI_BRIEF_GRID_URL, {
-    method: "POST",
-    accept: "*/*",
-    referer: landing.baseUrl,
-    headers: {
-      "x-requested-with": "XMLHttpRequest"
-    },
-    form: buildCnkiBriefGridForm(classId, request)
-  });
+  const languages = getCnkiSearchLanguages(request);
+  let bestCandidate: {
+    html: string;
+    items: ArticleRecord[];
+    language: CnkiSearchLanguage;
+    score: number;
+  } | null = null;
+  let lastError: unknown;
 
-  if (!grid.ok) {
+  for (const language of languages) {
+    try {
+      const grid = await context.browser.requestWithSession("cnki", CNKI_BRIEF_GRID_URL, {
+        method: "POST",
+        accept: "*/*",
+        referer: landing.baseUrl,
+        headers: {
+          "x-requested-with": "XMLHttpRequest"
+        },
+        form: buildCnkiBriefGridForm(classId, request, language)
+      });
+
+      if (!grid.ok) {
+        throw new ProviderAuthError(
+          `CNKI rejected the session HTTP request with status ${grid.status}. Refresh the saved browser session.`
+        );
+      }
+
+      if (isChallengePage(grid.url, grid.text)) {
+        throw new ProviderAuthError(
+          "CNKI returned a verification page while loading the result list. Refresh the saved browser session."
+        );
+      }
+
+      const items = rankCnkiSearchItems(request, parseCnkiSearchHtml(grid.text, landing.baseUrl));
+      const candidate = {
+        html: grid.text,
+        items,
+        language,
+        score: scoreCnkiProtocolResults(request, items)
+      };
+
+      if (!bestCandidate || isBetterCnkiProtocolCandidate(candidate, bestCandidate)) {
+        bestCandidate = candidate;
+      }
+    } catch (error) {
+      await writeDiagnosticLog(context.config, {
+        scope: "cnki",
+        event: "search_language_attempt_failed",
+        message: "One CNKI protocol language attempt failed.",
+        details: {
+          query: request.query,
+          mode: request.mode,
+          language: describeCnkiSearchLanguage(language),
+          error: summarizeError(error)
+        }
+      });
+      lastError = error;
+    }
+  }
+
+  if (!bestCandidate) {
+    if (lastError) {
+      throw lastError;
+    }
     throw new ProviderAuthError(
-      `CNKI rejected the session HTTP request with status ${grid.status}. Refresh the saved browser session.`
+      "CNKI returned no usable protocol result pages. Refresh the saved browser session."
     );
   }
 
-  if (isChallengePage(grid.url, grid.text)) {
-    throw new ProviderAuthError(
-      "CNKI returned a verification page while loading the result list. Refresh the saved browser session."
-    );
+  if (languages.length > 1) {
+    await writeDiagnosticLog(context.config, {
+      scope: "cnki",
+      event: "search_language_selected",
+      message: "CNKI protocol search selected the best language mode for this query.",
+      details: {
+        query: request.query,
+        mode: request.mode,
+        selectedLanguage: describeCnkiSearchLanguage(bestCandidate.language),
+        attemptedLanguages: languages.map(describeCnkiSearchLanguage),
+        resultCount: bestCandidate.items.length,
+        score: bestCandidate.score
+      }
+    });
   }
 
   return {
-    html: grid.text,
+    html: bestCandidate.html,
     baseUrl: landing.baseUrl,
-    transport: "http"
+    transport: "http",
+    notes: buildCnkiLanguageNotes(request, languages, bestCandidate.language)
   };
 }
 
@@ -489,13 +623,44 @@ async function fetchCnkiHtmlWithRequest(
 async function fetchCnkiHtmlWithBrowser(
   url: string,
   context: ProviderContext,
-  verificationMessage: string
+  verificationMessage: string,
+  diagnostic: {
+    stage: "search_results" | "detail_page";
+    query?: string;
+    mode?: SearchRequest["mode"];
+    locator?: string;
+  }
 ): Promise<CnkiHtmlResponse> {
+  await writeDiagnosticLog(context.config, {
+    scope: "cnki",
+    event: "browser_fallback_open",
+    message: "Opening a visible browser page for CNKI fallback.",
+    details: {
+      stage: diagnostic.stage,
+      query: diagnostic.query,
+      mode: diagnostic.mode,
+      locator: diagnostic.locator,
+      url
+    }
+  });
+
   const payload = await context.browser.withPage("cnki", async (page) => {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);
     const content = await page.content();
     if (isChallengePage(page.url(), content)) {
+      await writeDiagnosticLog(context.config, {
+        scope: "cnki",
+        event: "browser_fallback_challenge",
+        message: "CNKI browser fallback still hit a verification or challenge page.",
+        details: {
+          stage: diagnostic.stage,
+          query: diagnostic.query,
+          mode: diagnostic.mode,
+          locator: diagnostic.locator,
+          finalUrl: page.url()
+        }
+      });
       throw new ProviderAuthError(verificationMessage);
     }
     return {
@@ -904,6 +1069,120 @@ function normalizeCnkiDetailError(error: unknown): Error {
   );
 }
 
+function isBetterCnkiProtocolCandidate(
+  candidate: { items: ArticleRecord[]; score: number },
+  bestCandidate: { items: ArticleRecord[]; score: number }
+): boolean {
+  if (candidate.score !== bestCandidate.score) {
+    return candidate.score > bestCandidate.score;
+  }
+  return candidate.items.length > bestCandidate.items.length;
+}
+
+function scoreCnkiProtocolResults(request: SearchRequest, items: ArticleRecord[]): number {
+  if (!items.length) {
+    return 0;
+  }
+
+  const query = normalizeWhitespace(request.query).toLowerCase();
+  const englishOnlyQuery = containsLatin(query) && !containsChinese(query);
+  if (!englishOnlyQuery) {
+    return items.length;
+  }
+
+  return items.slice(0, Math.min(items.length, 10)).reduce((score, item, index) => {
+    return score + scoreCnkiEnglishResultItem(query, item, index);
+  }, 0);
+}
+
+export function rankCnkiSearchItems(
+  request: SearchRequest,
+  items: ArticleRecord[]
+): ArticleRecord[] {
+  const query = normalizeWhitespace(request.query).toLowerCase();
+  if (!(containsLatin(query) && !containsChinese(query))) {
+    return items;
+  }
+
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      score: scoreCnkiEnglishResultItem(query, item, index)
+    }))
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.item);
+}
+
+function scoreCnkiEnglishResultItem(
+  query: string,
+  item: ArticleRecord,
+  index: number
+): number {
+  const positionBoost = Math.max(0, 10 - index);
+  const title = normalizeWhitespace(item.title).toLowerCase();
+  const journal = normalizeWhitespace(item.journal).toLowerCase();
+  const snippets = (item.snippets ?? []).join(" ").toLowerCase();
+  const searchable = `${title} ${journal} ${snippets}`;
+  const englishTitle = containsLatin(item.title);
+  const pureEnglishTitle = englishTitle && !containsChinese(item.title);
+
+  let total = positionBoost + (englishTitle ? 3 : 0) + (pureEnglishTitle ? 2 : 0);
+  if (query && title.includes(query)) {
+    total += 14;
+  } else if (query && searchable.includes(query)) {
+    total += 8;
+  }
+
+  const queryTokens = query.split(/\s+/).filter(Boolean);
+  if (queryTokens.length > 1) {
+    const titleTokenHits = queryTokens.filter((token) => title.includes(token)).length;
+    const searchableTokenHits = queryTokens.filter((token) => searchable.includes(token)).length;
+    total += titleTokenHits * 2 + searchableTokenHits;
+  }
+
+  return total;
+}
+
+function buildCnkiLanguageNotes(
+  request: SearchRequest,
+  attemptedLanguages: CnkiSearchLanguage[],
+  selectedLanguage: CnkiSearchLanguage
+): string[] | undefined {
+  if (attemptedLanguages.length <= 1) {
+    return undefined;
+  }
+
+  const query = normalizeWhitespace(request.query);
+  if (!query || !(containsLatin(query) && !containsChinese(query))) {
+    return undefined;
+  }
+
+  return [
+    `CNKI protocol search evaluated ${attemptedLanguages
+      .map(describeCnkiSearchLanguage)
+      .join(" / ")} language modes for this English query.`,
+    `CNKI selected ${describeCnkiSearchLanguage(selectedLanguage)} mode to improve English-result coverage.`
+  ];
+}
+
+function describeCnkiSearchLanguage(language: CnkiSearchLanguage): string {
+  switch (language) {
+    case "":
+      return "all-language";
+    case "Both":
+      return "mixed-language";
+    case "CHINESE":
+    default:
+      return "Chinese-only";
+  }
+}
+
 function isChallengePage(url: string, html: string): boolean {
   return (
     url.includes("/verify/") ||
@@ -912,4 +1191,12 @@ function isChallengePage(url: string, html: string): boolean {
     html.includes("Just a moment") ||
     html.includes("cf-mitigated")
   );
+}
+
+function containsChinese(value: string): boolean {
+  return /[\u4e00-\u9fff]/.test(value);
+}
+
+function containsLatin(value: string): boolean {
+  return /[A-Za-z]/.test(value);
 }

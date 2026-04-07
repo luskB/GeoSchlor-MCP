@@ -2,7 +2,9 @@ import { BrowserSessionManager } from "../browser/session-manager.js";
 import { AppConfig } from "../config.js";
 import { HttpClient } from "../http/http-client.js";
 import { SearchProvider, ProviderContext } from "../providers/base.js";
+import { rankCnkiSearchItems } from "../providers/cnki-provider.js";
 import { FileCache } from "../storage/file-cache.js";
+import { summarizeError, writeDiagnosticLog } from "../utils/diagnostics.js";
 import {
   mergeArticleRecordList,
   needsAcademicEnrichment
@@ -139,7 +141,7 @@ export class SearchService {
     const collectedNotes: string[] = [];
     let lastError: unknown;
 
-    for (const variant of prioritizedVariants) {
+    for (const [variantIndex, variant] of prioritizedVariants.entries()) {
       try {
         const raw = await provider.search(
           {
@@ -152,11 +154,15 @@ export class SearchService {
         );
         mergedItems.push(...raw.items);
         collectedNotes.push(...(raw.notes ?? []));
-        const filtered = applyCommonFilters(
-          mergeArticleRecordList(mergedItems),
-          request.filters
+        const filtered = rankSourceSearchItems(
+          source,
+          request,
+          applyCommonFilters(mergeArticleRecordList(mergedItems), request.filters)
         );
-        if (filtered.length >= request.maxResults) {
+        if (
+          filtered.length >= request.maxResults &&
+          !shouldContinueVariantExpansion(source, request, prioritizedVariants, variantIndex)
+        ) {
           break;
         }
       } catch (error) {
@@ -168,10 +174,11 @@ export class SearchService {
       throw lastError;
     }
 
-    let items = applyCommonFilters(mergeArticleRecordList(mergedItems), request.filters).slice(
-      0,
-      request.maxResults
-    );
+    let items = rankSourceSearchItems(
+      source,
+      request,
+      applyCommonFilters(mergeArticleRecordList(mergedItems), request.filters)
+    ).slice(0, request.maxResults);
 
     if (request.enrichResults !== false) {
       items = await this.enrichSearchItems(source, items);
@@ -191,6 +198,7 @@ export class SearchService {
     items: ArticleRecord[]
   ): Promise<ArticleRecord[]> {
     const provider = this.getProvider(source);
+    const enrichmentContext = this.getEnrichmentContext(source);
     const enrichmentLimit = Math.min(this.providerContext.config.searchEnrichmentLimit, items.length);
 
     const enriched = await Promise.all(
@@ -201,15 +209,57 @@ export class SearchService {
 
         const locator = item.detailUrl ?? item.doi ?? item.id;
         try {
-          const record = await provider.getRecord(locator, this.providerContext);
+          if (source === "cnki") {
+            await writeDiagnosticLog(this.providerContext.config, {
+              scope: "cnki",
+              event: "search_enrichment_attempt",
+              message: "Attempting CNKI detail enrichment during search.",
+              details: {
+                title: item.title,
+                locator,
+                runtimeMode: enrichmentContext.config.cnkiRuntimeMode
+              }
+            });
+          }
+          const record = await provider.getRecord(locator, enrichmentContext);
           return record ? mergeArticleRecordList([item, record])[0] : item;
-        } catch {
+        } catch (error) {
+          if (source === "cnki") {
+            await writeDiagnosticLog(this.providerContext.config, {
+              scope: "cnki",
+              event: "search_enrichment_failed",
+              message: "CNKI detail enrichment failed during search.",
+              details: {
+                title: item.title,
+                locator,
+                runtimeMode: enrichmentContext.config.cnkiRuntimeMode,
+                error: summarizeError(error)
+              }
+            });
+          }
           return item;
         }
       })
     );
 
     return mergeArticleRecordList(enriched);
+  }
+
+  private getEnrichmentContext(source: SourceId): ProviderContext {
+    if (
+      source !== "cnki" ||
+      this.providerContext.config.cnkiRuntimeMode === "http_only"
+    ) {
+      return this.providerContext;
+    }
+
+    return {
+      ...this.providerContext,
+      config: {
+        ...this.providerContext.config,
+        cnkiRuntimeMode: "http_only"
+      }
+    };
   }
 }
 
@@ -257,4 +307,44 @@ function buildSearchNotes(
 function uniqueNotes(notes: string[]): string[] | undefined {
   const values = [...new Set(notes.filter(Boolean))];
   return values.length ? values : undefined;
+}
+
+function rankSourceSearchItems(
+  source: SourceId,
+  request: SearchRequest,
+  items: ArticleRecord[]
+): ArticleRecord[] {
+  if (source === "cnki") {
+    return rankCnkiSearchItems(request, items);
+  }
+
+  return items;
+}
+
+function shouldContinueVariantExpansion(
+  source: SourceId,
+  request: SearchRequest,
+  variants: string[],
+  currentIndex: number
+): boolean {
+  if (source !== "cnki") {
+    return false;
+  }
+
+  const query = request.query;
+  if (!(containsLatin(query) && !containsChinese(query))) {
+    return false;
+  }
+
+  return variants
+    .slice(currentIndex + 1)
+    .some((variant) => containsLatin(variant) && !containsChinese(variant));
+}
+
+function containsChinese(value: string): boolean {
+  return /[\u4e00-\u9fff]/.test(value);
+}
+
+function containsLatin(value: string): boolean {
+  return /[A-Za-z]/.test(value);
 }

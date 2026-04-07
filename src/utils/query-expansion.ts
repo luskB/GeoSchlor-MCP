@@ -7,31 +7,39 @@ interface QueryPair {
 }
 
 const DOMAIN_QUERY_PAIRS: QueryPair[] = [
-  { zh: "随钻测井", en: ["logging while drilling", "lwd"] },
-  { zh: "成像测井", en: ["image logging"] },
-  { zh: "声波测井", en: ["sonic logging"] },
-  { zh: "电成像测井", en: ["electrical imaging logging", "image logging"] },
-  { zh: "核磁共振测井", en: ["nmr logging"] },
-  { zh: "地球物理勘探", en: ["geophysical exploration"] },
-  { zh: "物探", en: ["geophysical exploration", "geophysics"] },
-  { zh: "测井", en: ["well logging", "logging"] },
-  { zh: "测井解释", en: ["log interpretation"] },
-  { zh: "岩石物理", en: ["rock physics"] },
-  { zh: "储层", en: ["reservoir"] },
-  { zh: "孔隙度", en: ["porosity"] },
-  { zh: "渗透率", en: ["permeability"] },
-  { zh: "地震", en: ["seismic"] },
-  { zh: "地球物理", en: ["geophysics"] },
-  { zh: "地质", en: ["geology"] },
-  { zh: "页岩气", en: ["shale gas"] },
-  { zh: "非常规油气", en: ["unconventional oil and gas"] }
+  { zh: "\u968f\u94bb\u6d4b\u4e95", en: ["logging while drilling", "lwd"] },
+  { zh: "\u6210\u50cf\u6d4b\u4e95", en: ["image logging"] },
+  { zh: "\u58f0\u6ce2\u6d4b\u4e95", en: ["sonic logging", "acoustic logging"] },
+  {
+    zh: "\u7535\u6210\u50cf\u6d4b\u4e95",
+    en: ["electrical imaging logging", "image logging"]
+  },
+  { zh: "\u6838\u78c1\u5171\u632f\u6d4b\u4e95", en: ["nmr logging"] },
+  { zh: "\u5730\u7403\u7269\u7406\u52d8\u63a2", en: ["geophysical exploration"] },
+  { zh: "\u7269\u63a2", en: ["geophysical exploration", "geophysics"] },
+  { zh: "\u6d4b\u4e95", en: ["well logging", "logging"] },
+  { zh: "\u6d4b\u4e95\u89e3\u91ca", en: ["log interpretation"] },
+  { zh: "\u5ca9\u77f3\u7269\u7406", en: ["rock physics"] },
+  { zh: "\u50a8\u5c42", en: ["reservoir"] },
+  { zh: "\u5b54\u9699\u5ea6", en: ["porosity"] },
+  { zh: "\u6e17\u900f\u7387", en: ["permeability"] },
+  { zh: "\u5730\u9707", en: ["seismic"] },
+  { zh: "\u5730\u7403\u7269\u7406", en: ["geophysics"] },
+  { zh: "\u5730\u8d28", en: ["geology"] },
+  { zh: "\u9875\u5ca9\u6c14", en: ["shale gas"] },
+  { zh: "\u975e\u5e38\u89c4\u6cb9\u6c14", en: ["unconventional oil and gas"] }
 ];
 
 const CHINESE_PRIORITY_SOURCES = new Set<SourceId>(["cnki", "wanfang", "vip"]);
 const ENGLISH_PRIORITY_SOURCES = new Set<SourceId>([
   "geophysics",
   "petrophysics",
-  "onepetro"
+  "onepetro",
+  "spe",
+  "spwla",
+  "eage",
+  "aapg",
+  "openalex"
 ]);
 
 export function buildQueryVariants(query: string, mode: SearchMode): string[] {
@@ -55,27 +63,37 @@ export function buildQueryVariants(query: string, mode: SearchMode): string[] {
     variants.push(enToZh);
   }
 
-  const exactCompanions = collectExactCompanions(normalized);
-  variants.push(...exactCompanions);
+  variants.push(...collectExactCompanions(normalized));
 
-  return uniqueList(variants).slice(0, 3);
+  return uniqueList(variants).slice(0, 4);
 }
 
 export function prioritizeQueryVariants(source: SourceId, variants: string[]): string[] {
-  if (variants.length <= 1) {
-    return variants;
+  const uniqueVariants = uniqueList(variants.map((variant) => normalizeWhitespace(variant)).filter(Boolean));
+  if (uniqueVariants.length <= 1) {
+    return uniqueVariants;
   }
 
-  const preferred = [...variants];
-  preferred.sort((left, right) => scoreVariant(source, right) - scoreVariant(source, left));
-  return uniqueList(preferred);
+  const [original, ...companions] = uniqueVariants;
+  companions.sort(
+    (left, right) => scoreVariant(source, original, right) - scoreVariant(source, original, left)
+  );
+  return [original, ...companions];
 }
 
-function scoreVariant(source: SourceId, query: string): number {
+function scoreVariant(source: SourceId, originalQuery: string, query: string): number {
   const chinese = containsChinese(query);
   const english = containsLatin(query);
+  const originalIsEnglish = containsLatin(originalQuery) && !containsChinese(originalQuery);
+  const originalIsChinese = containsChinese(originalQuery) && !containsLatin(originalQuery);
 
   if (CHINESE_PRIORITY_SOURCES.has(source)) {
+    if (originalIsEnglish) {
+      return english ? 3 : chinese ? 2 : 1;
+    }
+    if (originalIsChinese) {
+      return chinese ? 3 : english ? 1 : 2;
+    }
     return chinese ? 3 : english ? 1 : 2;
   }
 
@@ -111,8 +129,9 @@ function translateEnToZh(query: string): string | undefined {
   let translated = query;
   let matched = false;
   for (const pair of DOMAIN_QUERY_PAIRS) {
-    for (const english of pair.en.sort((left, right) => right.length - left.length)) {
-      const pattern = new RegExp(escapeForRegExp(english), "gi");
+    const englishVariants = [...pair.en].sort((left, right) => right.length - left.length);
+    for (const english of englishVariants) {
+      const pattern = new RegExp(`\\b${escapeForRegExp(english)}\\b`, "gi");
       if (pattern.test(translated)) {
         translated = translated.replace(pattern, pair.zh);
         matched = true;
@@ -126,13 +145,19 @@ function translateEnToZh(query: string): string | undefined {
 function collectExactCompanions(query: string): string[] {
   const normalized = normalizeWhitespace(query).toLowerCase();
   for (const pair of DOMAIN_QUERY_PAIRS) {
-    if (normalized === pair.zh) {
-      return pair.en.slice(1);
+    if (normalized === pair.zh.toLowerCase()) {
+      return [...pair.en];
     }
-    if (pair.en.some((english) => english.toLowerCase() === normalized)) {
-      return [pair.zh];
+
+    const englishIndex = pair.en.findIndex((english) => english.toLowerCase() === normalized);
+    if (englishIndex >= 0) {
+      return [
+        ...pair.en.filter((_, index) => index !== englishIndex),
+        pair.zh
+      ];
     }
   }
+
   return [];
 }
 

@@ -7,6 +7,7 @@ export interface AppConfig {
   dataDir: string;
   cacheDir: string;
   authDir: string;
+  diagnosticLogPath: string;
   downloadDir: string;
   jobStorePath: string;
   searchCacheTtlMs: number;
@@ -84,6 +85,7 @@ export function loadConfig(): AppConfig {
     dataDir,
     cacheDir: resolve(dataDir, "cache"),
     authDir,
+    diagnosticLogPath: resolve(dataDir, "logs", "diagnostics.log"),
     downloadDir: resolve(appBaseDir, process.env.CNKI_MCP_DOWNLOAD_DIR ?? "downloads"),
     jobStorePath: resolve(dataDir, "jobs.json"),
     searchCacheTtlMs: getNumber("CNKI_MCP_CACHE_TTL_MINUTES", 720) * 60 * 1000,
