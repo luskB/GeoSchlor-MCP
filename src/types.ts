@@ -1,13 +1,13 @@
 export type SourceId =
   | "cnki"
   | "geophysics"
+  | "jge"
   | "petrophysics"
   | "onepetro"
   | "spe"
   | "spwla"
   | "eage"
   | "aapg"
-  | "openalex"
   | "wanfang"
   | "vip";
 

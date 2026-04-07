@@ -33,13 +33,13 @@ const DOMAIN_QUERY_PAIRS: QueryPair[] = [
 const CHINESE_PRIORITY_SOURCES = new Set<SourceId>(["cnki", "wanfang", "vip"]);
 const ENGLISH_PRIORITY_SOURCES = new Set<SourceId>([
   "geophysics",
+  "jge",
   "petrophysics",
   "onepetro",
   "spe",
   "spwla",
   "eage",
-  "aapg",
-  "openalex"
+  "aapg"
 ]);
 
 export function buildQueryVariants(query: string, mode: SearchMode): string[] {

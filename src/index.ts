@@ -9,6 +9,7 @@ import { AapgProvider } from "./providers/aapg-provider.js";
 import { CnkiProvider } from "./providers/cnki-provider.js";
 import { EageProvider } from "./providers/eage-provider.js";
 import { GeophysicsProvider } from "./providers/geophysics-provider.js";
+import { JgeProvider } from "./providers/jge-provider.js";
 import { OnePetroProvider } from "./providers/onepetro-provider.js";
 import { PetrophysicsProvider } from "./providers/petrophysics-provider.js";
 import { SpeProvider } from "./providers/spe-provider.js";
@@ -17,7 +18,6 @@ import { VipProvider } from "./providers/vip-provider.js";
 import { WanfangProvider } from "./providers/wanfang-provider.js";
 import { DownloadManager } from "./services/download-manager.js";
 import { SearchService } from "./services/search-service.js";
-import { ScholarSearchService } from "./services/scholar-search-service.js";
 import { FileCache } from "./storage/file-cache.js";
 import { JobStore } from "./storage/job-store.js";
 import { ensureDir } from "./utils/files.js";
@@ -45,6 +45,7 @@ const searchService = new SearchService(
   [
     new CnkiProvider(),
     new GeophysicsProvider(),
+    new JgeProvider(),
     new PetrophysicsProvider(),
     new OnePetroProvider(),
     new SpeProvider(),
@@ -55,7 +56,6 @@ const searchService = new SearchService(
     new VipProvider()
   ]
 );
-const scholarSearchService = new ScholarSearchService(config, http, cache);
 const downloadManager = new DownloadManager(searchService, jobStore);
 
 const server = new McpServer({
@@ -68,6 +68,7 @@ const searchSourceSchema = z
     "all",
     "cnki",
     "geophysics",
+    "jge",
     "petrophysics",
     "onepetro",
     "spe",
@@ -79,13 +80,14 @@ const searchSourceSchema = z
   ])
   .optional()
   .describe(
-    "Target source to search. Use 'all' for a broad cross-source search. Allowed values: all, cnki, geophysics, petrophysics, onepetro, spe, spwla, eage, aapg, wanfang, vip."
+    "Target source to search. Use 'all' for a broad cross-source search. Allowed values: all, cnki, geophysics, jge, petrophysics, onepetro, spe, spwla, eage, aapg, wanfang, vip."
   );
 
 const providerSourceSchema = z
   .enum([
     "cnki",
     "geophysics",
+    "jge",
     "petrophysics",
     "onepetro",
     "spe",
@@ -104,27 +106,6 @@ const querySchema = z
   .min(1)
   .describe(
     "Search input. Prefer a short topic phrase, title fragment, author name, journal name, or DOI, for example 'well logging', 'A quantitative characterization...', or '10.1190/geo-2025-0139'."
-  );
-
-const authorNameSchema = z
-  .string()
-  .min(1)
-  .describe(
-    "Scholar or author name to look up, for example '张凯' or 'Kai Zhang'. Use this tool when the user asks for a specific teacher, professor, researcher, or author."
-  );
-
-const institutionHintSchema = z
-  .string()
-  .optional()
-  .describe(
-    "Optional institution hint, for example '中国石油大学' or 'China University of Petroleum, East China'. Highly recommended for common names because it sharply improves author disambiguation."
-  );
-
-const topicHintSchema = z
-  .string()
-  .optional()
-  .describe(
-    "Optional research-topic hint, for example '测井', 'acoustic logging', or 'reservoir evaluation'. Use this when the user wants one scholar's papers in a specific direction."
   );
 
 const searchModeSchema = z
@@ -251,6 +232,7 @@ async function runSearchTool(input: {
     | "all"
     | "cnki"
     | "geophysics"
+    | "jge"
     | "petrophysics"
     | "onepetro"
     | "spe"
@@ -294,7 +276,7 @@ async function runSearchTool(input: {
 
 server.tool(
   "search_literature",
-  "General-purpose multi-source literature search. Use this as the default entry point when the user did not name a single source. Returns grouped results from one or more sources. Prefer mode='keyword'. For latest or recent papers, set sortBy='published' and optionally yearFrom/yearTo. If the user is asking for a specific teacher, professor, or author together with institution or topic, prefer search_scholar_publications instead.",
+  "General-purpose multi-source literature search. Use this as the default entry point when the user did not name a single source. Returns grouped results from one or more sources. Prefer mode='keyword'. For latest or recent papers, set sortBy='published' and optionally yearFrom/yearTo.",
   {
     source: searchSourceSchema,
     query: querySchema,
@@ -350,6 +332,33 @@ server.tool(
   async (input) =>
     runSearchTool({
       source: "geophysics",
+      query: input.query,
+      mode: input.mode,
+      maxResults: input.maxResults,
+      expandBilingual: input.expandBilingual,
+      enrichResults: input.enrichResults,
+      yearFrom: input.yearFrom,
+      yearTo: input.yearTo,
+      sortBy: input.sortBy
+    })
+);
+
+server.tool(
+  "search_jge",
+  "Search only the Journal of Geophysics and Engineering (JGE). Use this when the user explicitly wants JGE papers. For the newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
+  {
+    query: querySchema,
+    mode: searchModeSchema,
+    maxResults: maxResultsSchema,
+    expandBilingual: expandBilingualSchema,
+    enrichResults: enrichResultsSchema,
+    yearFrom: yearFromSchema,
+    yearTo: yearToSchema,
+    sortBy: sortBySchema
+  },
+  async (input) =>
+    runSearchTool({
+      source: "jge",
       query: input.query,
       mode: input.mode,
       maxResults: input.maxResults,
@@ -567,7 +576,7 @@ server.tool(
 
 server.tool(
   "search_petroleum_literature",
-  "Recommended default search tool for petroleum, logging, geology, geophysics, and reservoir-evaluation topics. It searches across all configured sources with bilingual expansion and metadata enrichment already enabled, including CNKI, GEOPHYSICS, Petrophysics, OnePetro, SPE, SPWLA, EAGE, AAPG, Wanfang, and VIP. If the request is about one specific scholar or teacher plus institution/topic, prefer search_scholar_publications instead.",
+  "Recommended default search tool for petroleum, logging, geology, geophysics, and reservoir-evaluation topics. It searches across all configured sources with bilingual expansion and metadata enrichment already enabled, including CNKI, GEOPHYSICS, Journal of Geophysics and Engineering, Petrophysics, OnePetro, SPE, SPWLA, EAGE, AAPG, Wanfang, and VIP.",
   {
     query: querySchema,
     mode: searchModeSchema,
@@ -590,34 +599,6 @@ server.tool(
       journal: input.journal,
       sortBy: input.sortBy
     })
-);
-
-server.tool(
-  "search_scholar_publications",
-  "Best tool for professor, teacher, researcher, or author lookup when the user names a person together with institution, lab, department, or research direction. This is especially strong for English and international papers. Provide authorName, then add institution and topic whenever possible. Example fit: '中国石油大学张凯老师的测井论文'.",
-  {
-    authorName: authorNameSchema,
-    institution: institutionHintSchema,
-    topic: topicHintSchema,
-    maxResults: maxResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema
-  },
-  async (input) => {
-    try {
-      const result = await scholarSearchService.search({
-        authorName: input.authorName,
-        institution: cleanOptionalText(input.institution),
-        topic: cleanOptionalText(input.topic),
-        maxResults: input.maxResults ?? 10,
-        yearFrom: input.yearFrom,
-        yearTo: input.yearTo
-      });
-      return textResult(result);
-    } catch (error) {
-      return errorResult(error);
-    }
-  }
 );
 
 server.tool(
