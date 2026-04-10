@@ -23,6 +23,7 @@ import {
   OpenAlexWork,
   UnpaywallResponse
 } from "./open-metadata.js";
+import { searchCrossrefAuthorAffiliationCandidates } from "./author-affiliation-rescue.js";
 
 const PETROPHYSICS_PATTERNS = [/^petrophysics\b/i];
 
@@ -33,7 +34,7 @@ export class PetrophysicsProvider implements SearchProvider {
     request: SearchRequest,
     context: ProviderContext
   ): Promise<ProviderSearchResult> {
-    const cacheKey = JSON.stringify({ version: 3, request });
+    const cacheKey = JSON.stringify({ version: 4, request });
     const cached = await context.cache.get<ProviderSearchResult>(
       "search/petrophysics",
       cacheKey
@@ -156,12 +157,38 @@ export class PetrophysicsProvider implements SearchProvider {
       throw new Error("Petrophysics metadata sources are temporarily unavailable.");
     }
 
-    const merged = mergeMetadataRecords([...crossrefItems, ...openAlexItems]).slice(
+    const rescueItems = await this.searchAuthorAffiliationRescue(
+      request,
+      context,
+      limit
+    );
+
+    const merged = mergeMetadataRecords([
+      ...rescueItems,
+      ...crossrefItems,
+      ...openAlexItems
+    ]).slice(
       0,
       request.maxResults
     );
 
     return Promise.all(merged.map((record) => this.enrichRecord(record, context)));
+  }
+
+  private async searchAuthorAffiliationRescue(
+    request: SearchRequest,
+    context: ProviderContext,
+    limit: number
+  ): Promise<ArticleRecord[]> {
+    const items = await searchCrossrefAuthorAffiliationCandidates(
+      request,
+      context,
+      limit
+    );
+
+    return items
+      .filter((item) => isPetrophysicsItem(item, context.config.petrophysicsIssn))
+      .map(mapCrossrefItem);
   }
 
   private async searchCrossref(

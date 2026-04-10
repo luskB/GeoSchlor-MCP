@@ -164,6 +164,9 @@ export interface CrossrefSearchOptions {
   journalIssn?: string;
   rows: number;
   extraFilters?: string[];
+  authorQueries?: string[];
+  affiliationQuery?: string;
+  bibliographicQuery?: string;
 }
 
 export interface OpenAlexSearchOptions {
@@ -215,7 +218,18 @@ export function buildCrossrefSearchUrl(
     params.set("filter", filters.join(","));
   }
 
-  if (request.mode === "title") {
+  const authorQueries = uniqueList(options.authorQueries ?? []);
+  if (authorQueries.length) {
+    for (const authorQuery of authorQueries) {
+      params.append("query.author", authorQuery);
+    }
+    if (options.affiliationQuery) {
+      params.set("query.affiliation", options.affiliationQuery);
+    }
+    if (options.bibliographicQuery) {
+      params.set("query.bibliographic", options.bibliographicQuery);
+    }
+  } else if (request.mode === "title") {
     params.set("query.title", request.query);
   } else if (request.mode === "author") {
     params.set("query.author", request.query);

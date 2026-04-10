@@ -80,7 +80,7 @@ const searchSourceSchema = z
   ])
   .optional()
   .describe(
-    "Target source to search. Use 'all' for a broad cross-source search. Allowed values: all, cnki, geophysics, jge, petrophysics, onepetro, spe, spwla, eage, aapg, wanfang, vip."
+    "Target source to search. Use 'all' for a broad cross-source search. Use a specific source only when the user explicitly names a platform or database such as CNKI, OnePetro, SPE, SPWLA, EAGE, AAPG, Wanfang, or VIP. For one named journal such as GEOPHYSICS, Journal of Geophysics and Engineering, or Petrophysics, prefer the journal filter unless the user explicitly wants one platform."
   );
 
 const providerSourceSchema = z
@@ -105,14 +105,14 @@ const querySchema = z
   .string()
   .min(1)
   .describe(
-    "Search input. Prefer a short topic phrase, title fragment, author name, journal name, or DOI, for example 'well logging', 'A quantitative characterization...', or '10.1190/geo-2025-0139'."
+    "Search input. Prefer a short topic phrase, title fragment, author name, journal name, or DOI, for example 'well logging', 'A quantitative characterization...', 'Kai Zhang', or '10.1190/geo-2025-0139'. For Chinese authors' English papers, prefer the English author name when known and keep the institution in the separate institution field."
   );
 
 const searchModeSchema = z
   .enum(["keyword", "title", "author", "doi", "journal"])
   .optional()
   .describe(
-    "How to interpret the query. Use 'keyword' by default. Use 'title' for title fragments, 'author' for author names, 'doi' only when the query is a DOI, and 'journal' for source/journal title matching."
+    "How to interpret the query. Use 'keyword' by default. Use 'author' whenever the user asks for papers by a person, teacher, or researcher. Use 'title' for title fragments, 'doi' only when the query is a DOI, and 'journal' only when the query itself is a journal or source title."
   );
 
 const maxResultsSchema = z
@@ -159,7 +159,14 @@ const journalSchema = z
   .string()
   .optional()
   .describe(
-    "Optional journal or source title filter. Use this only when the user explicitly wants one journal or publication title."
+    "Optional journal or source title filter. Use this when the user explicitly wants one journal, for example 'GEOPHYSICS', 'Journal of Geophysics and Engineering', or 'Petrophysics'. Keep the topical terms in query and put the journal name here."
+  );
+
+const institutionSchema = z
+  .string()
+  .optional()
+  .describe(
+    "Optional institution or affiliation hint, for example 'China University of Petroleum' or '中国石油大学'. Use this when the user asks for papers by an author from a specific university, institute, school, or department. This is especially helpful for author searches and coauthor searches."
   );
 
 const sortBySchema = z
@@ -249,6 +256,7 @@ async function runSearchTool(input: {
   yearFrom?: number;
   yearTo?: number;
   journal?: string;
+  institution?: string;
   sortBy?: "relevance" | "published";
   resourceCode?: string;
 }) {
@@ -264,6 +272,7 @@ async function runSearchTool(input: {
         yearFrom: input.yearFrom,
         yearTo: input.yearTo,
         journal: cleanOptionalText(input.journal),
+        institution: cleanOptionalText(input.institution),
         sortBy: input.sortBy,
         resourceCode: cleanOptionalText(input.resourceCode)
       }
@@ -276,7 +285,7 @@ async function runSearchTool(input: {
 
 server.tool(
   "search_literature",
-  "General-purpose multi-source literature search. Use this as the default entry point when the user did not name a single source. Returns grouped results from one or more sources. Prefer mode='keyword'. For latest or recent papers, set sortBy='published' and optionally yearFrom/yearTo.",
+  "General-purpose multi-source literature search. Use this as the default entry point when the user did not name a single source. Also use this for foreign-journal searches after the foreign single-source tools were consolidated. If the user says 'in GEOPHYSICS', 'in Journal of Geophysics and Engineering', or 'in Petrophysics', keep the topic in query and set journal to the exact journal title. If the user names a platform such as OnePetro, SPE, SPWLA, EAGE, or AAPG, set source to that platform. If the user asks for papers by a person or teacher, set mode='author'. If the user mentions an institution such as 中国石油大学 or China University of Petroleum, put that value in institution instead of mixing it into query when possible. For Chinese authors' English papers, prefer the English author name when known and let the service combine author and institution rescue. For latest or recent papers, set sortBy='published' and optionally yearFrom/yearTo.",
   {
     source: searchSourceSchema,
     query: querySchema,
@@ -287,6 +296,7 @@ server.tool(
     yearFrom: yearFromSchema,
     yearTo: yearToSchema,
     journal: journalSchema,
+    institution: institutionSchema,
     sortBy: sortBySchema,
     resourceCode: resourceCodeSchema
   },
@@ -295,13 +305,14 @@ server.tool(
 
 server.tool(
   "search_cnki",
-  "CNKI-specific search for Chinese academic literature. Use this when the user explicitly asks for CNKI or Chinese journal papers. Prefer mode='keyword'. Use mode='doi' only when the query itself is a DOI.",
+  "CNKI-specific search for Chinese academic literature. Use this when the user explicitly asks for CNKI or Chinese journal papers. Prefer mode='keyword'. If the user asks for papers by an author or teacher, set mode='author'. If the user also gives a university or department, pass that institution separately to help rescue English records that CNKI author search may miss. For Chinese authors' English papers, prefer the English author name when known and let the service confirm candidate titles or DOIs back in CNKI. Use mode='title' for title fragments and mode='doi' only when the query itself is a DOI.",
   {
     query: querySchema,
     mode: searchModeSchema,
     maxResults: maxResultsSchema,
     expandBilingual: expandBilingualSchema,
     enrichResults: enrichResultsSchema,
+    institution: institutionSchema,
     resourceCode: resourceCodeSchema
   },
   async (input) =>
@@ -312,223 +323,8 @@ server.tool(
       maxResults: input.maxResults,
       expandBilingual: input.expandBilingual,
       enrichResults: input.enrichResults,
+      institution: input.institution,
       resourceCode: input.resourceCode
-    })
-);
-
-server.tool(
-  "search_geophysics",
-  "Search only the journal GEOPHYSICS. Use this when the user explicitly wants results from GEOPHYSICS. For the newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "geophysics",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_jge",
-  "Search only the Journal of Geophysics and Engineering (JGE). Use this when the user explicitly wants JGE papers. For the newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "jge",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_petrophysics",
-  "Search only the journal Petrophysics (SPWLA). Use this when the user explicitly wants SPWLA or Petrophysics papers. For newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "petrophysics",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_onepetro",
-  "Search OnePetro-style petroleum engineering literature across the broader OnePetro-style metadata pool. Use this for a wide petroleum-engineering sweep or when the user names OnePetro itself. For narrower association-focused searches, prefer search_spe or search_spwla.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "onepetro",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_spe",
-  "Search SPE literature using public metadata. Use this when the user explicitly wants Society of Petroleum Engineers papers, journals, or conference proceedings. For newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "spe",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_spwla",
-  "Search SPWLA literature using public metadata. Use this when the user wants SPWLA symposium, transaction, or broader SPWLA records beyond the Petrophysics journal. For the journal only, prefer search_petrophysics.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "spwla",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_eage",
-  "Search EAGE / EarthDoc literature using public metadata. Use this for EAGE workshops, conference papers, EarthDoc records, and related geoscience proceedings. For newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "eage",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
-    })
-);
-
-server.tool(
-  "search_aapg",
-  "Search AAPG literature using public metadata. Use this for AAPG Bulletin, Datapages-style records, and other AAPG-indexed results. For newest papers, set sortBy='published' and optionally yearFrom/yearTo.",
-  {
-    query: querySchema,
-    mode: searchModeSchema,
-    maxResults: maxResultsSchema,
-    expandBilingual: expandBilingualSchema,
-    enrichResults: enrichResultsSchema,
-    yearFrom: yearFromSchema,
-    yearTo: yearToSchema,
-    sortBy: sortBySchema
-  },
-  async (input) =>
-    runSearchTool({
-      source: "aapg",
-      query: input.query,
-      mode: input.mode,
-      maxResults: input.maxResults,
-      expandBilingual: input.expandBilingual,
-      enrichResults: input.enrichResults,
-      yearFrom: input.yearFrom,
-      yearTo: input.yearTo,
-      sortBy: input.sortBy
     })
 );
 
@@ -576,19 +372,21 @@ server.tool(
 
 server.tool(
   "search_petroleum_literature",
-  "Recommended default search tool for petroleum, logging, geology, geophysics, and reservoir-evaluation topics. It searches across all configured sources with bilingual expansion and metadata enrichment already enabled, including CNKI, GEOPHYSICS, Journal of Geophysics and Engineering, Petrophysics, OnePetro, SPE, SPWLA, EAGE, AAPG, Wanfang, and VIP.",
+  "Recommended default search tool for petroleum, logging, geology, geophysics, and reservoir-evaluation topics. This is also the preferred tool for foreign-source searches after the foreign single-source tools were consolidated. If the user says 'in GEOPHYSICS', 'in Journal of Geophysics and Engineering', or 'in Petrophysics', keep the topic in query and set journal to the exact journal title. If the user names a foreign platform such as OnePetro, SPE, SPWLA, EAGE, or AAPG, set source to that platform. If the user asks for papers by a person or teacher, set mode='author'. If the user also gives an institution such as 中国石油大学 or China University of Petroleum, pass that value in institution so the service can use author-affiliation rescue. For Chinese authors' English papers, prefer the English author name when known and let the service combine it with institution hints. For latest papers, set sortBy='published' and optionally yearFrom/yearTo.",
   {
+    source: searchSourceSchema,
     query: querySchema,
     mode: searchModeSchema,
     maxResults: maxResultsSchema,
     yearFrom: yearFromSchema,
     yearTo: yearToSchema,
     journal: journalSchema,
+    institution: institutionSchema,
     sortBy: sortBySchema
   },
   async (input) =>
     runSearchTool({
-      source: "all",
+      source: input.source ?? "all",
       query: input.query,
       mode: input.mode,
       maxResults: input.maxResults,
@@ -597,6 +395,7 @@ server.tool(
       yearFrom: input.yearFrom,
       yearTo: input.yearTo,
       journal: input.journal,
+      institution: input.institution,
       sortBy: input.sortBy
     })
 );
@@ -726,7 +525,7 @@ server.tool(
       run: ["npm run dev", "npm run start"],
       notes: [
         "CNKI search and download depend on a saved browser session because the official site uses verification pages.",
-        "GEOPHYSICS, Petrophysics, OnePetro, SPE, SPWLA, EAGE, and AAPG use public metadata and OA resolution by default.",
+        "Foreign literature search now flows through the unified search tools. Use journal for exact journals such as GEOPHYSICS, Journal of Geophysics and Engineering, or Petrophysics, and use source for explicit platforms such as OnePetro, SPE, SPWLA, EAGE, or AAPG.",
         "Wanfang uses the official grpc-web protocol for search and detail lookup; CQVIP uses signed protocol requests.",
         "If no OA copy exists, metadata-first providers will clearly report that publisher or institutional access is required."
       ]

@@ -54,7 +54,7 @@ describe("CnkiProvider helpers", () => {
     const b = buildCnkiSearchCacheKey(request, "state-b", "auto");
 
     expect(a).not.toBe(b);
-    expect(a).toContain("cnki-search-v5");
+    expect(a).toContain("cnki-search-v6");
   });
 
   it("builds a brief grid form for protocol search", () => {

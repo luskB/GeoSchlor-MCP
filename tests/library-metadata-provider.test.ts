@@ -171,14 +171,17 @@ describe("MetadataLibraryProvider wrappers", () => {
     expect(result.items[0]?.doi).toBe("10.1093/jge/gxaf012");
   });
 
-  it("rescues JGE author queries with institution hints via OpenAlex author matching", async () => {
+  it("rescues JGE author searches with institution hints via Crossref author-affiliation matching", async () => {
     const provider = new JgeProvider();
     const result = await provider.search(
       {
         source: "jge",
-        query: "张凯 中国石油大学 测井",
-        mode: "keyword",
-        maxResults: 5
+        query: "Kai Zhang",
+        mode: "author",
+        maxResults: 5,
+        filters: {
+          institution: "China University of Petroleum"
+        }
       },
       createProviderContext([
         { message: { items: [] } },
@@ -192,95 +195,46 @@ describe("MetadataLibraryProvider wrappers", () => {
           ]
         },
         {
-          results: [
-            {
-              id: "https://openalex.org/A5100323988",
-              display_name: "Kai Zhang",
-              display_name_alternatives: ["Zhang Kai", "张凯"],
-              relevance_score: 500,
-              works_count: 12,
-              last_known_institutions: [
-                {
-                  id: "https://openalex.org/I4210162190",
-                  display_name: "China University of Petroleum, East China"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          results: [
-            {
-              id: "https://openalex.org/W4210798042",
-              doi: "https://doi.org/10.1093/jge/gxab074",
-              display_name: "Pulse width research on half-sine excitation signal for bending vibrator",
-              publication_year: 2022,
-              primary_location: {
-                landing_page_url: "https://doi.org/10.1093/jge/gxab074",
-                source: {
-                  display_name: "Journal of Geophysics and Engineering",
-                  issn: ["1742-2132", "1742-2140"]
-                }
-              },
-              authorships: [
-                {
-                  author: {
-                    id: "https://openalex.org/A5100323988",
-                    display_name: "Kai Zhang"
+          message: {
+            items: [
+              {
+                DOI: "10.1093/jge/gxab074",
+                title: ["Pulse width research on half-sine excitation signal for bending vibrator"],
+                publisher: "Oxford University Press",
+                "container-title": ["Journal of Geophysics and Engineering"],
+                URL: "https://doi.org/10.1093/jge/gxab074",
+                author: [
+                  {
+                    given: "Kai",
+                    family: "Zhang",
+                    affiliation: [
+                      {
+                        name: "China University of Petroleum, East China, Qingdao, China"
+                      }
+                    ]
                   },
-                  institutions: [
-                    {
-                      display_name: "China University of Petroleum, East China"
-                    }
-                  ]
+                  {
+                    given: "Baohai",
+                    family: "Tan",
+                    affiliation: [
+                      {
+                        name: "China University of Petroleum, East China, Qingdao, China"
+                      }
+                    ]
+                  }
+                ],
+                resource: {
+                  primary: {
+                    URL: "https://academic.oup.com/jge/article/19/1/67/6500000"
+                  }
                 }
-              ],
-              open_access: {
-                is_oa: false
               }
-            }
-          ]
+            ]
+          }
         },
-        {
-          results: [
-            {
-              id: "https://openalex.org/W4210798042",
-              doi: "https://doi.org/10.1093/jge/gxab074",
-              display_name: "Pulse width research on half-sine excitation signal for bending vibrator",
-              publication_year: 2022,
-              primary_location: {
-                landing_page_url: "https://doi.org/10.1093/jge/gxab074",
-                source: {
-                  display_name: "Journal of Geophysics and Engineering",
-                  issn: ["1742-2132", "1742-2140"]
-                }
-              },
-              authorships: [
-                {
-                  author: {
-                    id: "https://openalex.org/A5100323988",
-                    display_name: "Kai Zhang"
-                  },
-                  institutions: [
-                    {
-                      id: "https://openalex.org/I4210162190",
-                      display_name: "China University of Petroleum, East China"
-                    }
-                  ]
-                }
-              ],
-              open_access: {
-                is_oa: false
-              }
-            }
-          ]
-        },
-        {
-          results: []
-        },
-        {
-          results: []
-        }
+        { message: { items: [] } },
+        { message: { items: [] } },
+        { message: { items: [] } }
       ])
     );
 
@@ -289,9 +243,7 @@ describe("MetadataLibraryProvider wrappers", () => {
       "Pulse width research on half-sine excitation signal for bending vibrator"
     );
     expect(result.items[0]?.authors).toContain("Kai Zhang");
-    expect(result.notes).toContain(
-      "JGE author-focused rescue used OpenAlex author matching inside the journal."
-    );
+    expect(result.items[0]?.journal).toBe("Journal of Geophysics and Engineering");
   });
 
   it("matches AAPG Datapages-style Crossref records", async () => {

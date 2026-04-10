@@ -7,7 +7,7 @@ const AAPG_OPTIONS: MetadataLibraryProviderOptions = {
   id: "aapg",
   displayName: "AAPG",
   cacheNamespace: "search/aapg",
-  cacheVersion: 2,
+  cacheVersion: 3,
   publisherPattern: /(american association of petroleum geologists|aapg\/datapages|aapg)/i,
   excludePublisherPattern: /unmaintained records/i,
   journalPatterns: [/^aapg bulletin$/i, /search and discovery/i],

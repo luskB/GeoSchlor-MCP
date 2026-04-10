@@ -7,7 +7,7 @@ const EAGE_OPTIONS: MetadataLibraryProviderOptions = {
   id: "eage",
   displayName: "EAGE EarthDoc",
   cacheNamespace: "search/eage",
-  cacheVersion: 2,
+  cacheVersion: 3,
   doiPrefixes: ["10.3997/"],
   publisherPattern: /(european association of geoscientists\s*&\s*engineers|eage)/i,
   journalPatterns: [/\beage\b/i, /earthdoc/i, /borehole geophysics workshop/i],

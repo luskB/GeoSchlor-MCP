@@ -15,8 +15,11 @@ import {
 } from "../utils/text.js";
 import { summarizeError, writeDiagnosticLog } from "../utils/diagnostics.js";
 import { sha1 } from "../utils/hash.js";
+import { mergeArticleRecordList } from "../utils/article-records.js";
+import { searchCrossrefAuthorAffiliationCandidates } from "./author-affiliation-rescue.js";
+import { CrossrefItem } from "./open-metadata.js";
 
-const CNKI_SEARCH_CACHE_VERSION = "cnki-search-v5";
+const CNKI_SEARCH_CACHE_VERSION = "cnki-search-v6";
 const CNKI_BRIEF_GRID_URL = "https://kns.cnki.net/kns8s/brief/grid";
 const CNKI_HTML_ACCEPT =
   "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8";
@@ -56,7 +59,9 @@ export class CnkiProvider implements SearchProvider {
     }
 
     const { html, baseUrl, transport, notes } = await fetchCnkiSearchHtml(request, context);
-    const items = rankCnkiSearchItems(request, parseCnkiSearchHtml(html, baseUrl)).slice(
+    const protocolItems = rankCnkiSearchItems(request, parseCnkiSearchHtml(html, baseUrl));
+    const rescueItems = await this.searchByAuthorAffiliationRescue(request, context);
+    const items = mergeArticleRecordList([...rescueItems, ...protocolItems]).slice(
       0,
       request.maxResults
     );
@@ -66,6 +71,11 @@ export class CnkiProvider implements SearchProvider {
       items,
       notes: [
         ...(notes ?? []),
+        ...(rescueItems.length
+          ? [
+              "CNKI author and institution rescue used external metadata to confirm candidate titles or DOIs before retrying CNKI."
+            ]
+          : []),
         transport === "http"
           ? "CNKI search used saved-session HTTP requests and avoided opening a visible browser page."
           : "CNKI search fell back to the browser flow after the protocol request was blocked.",
@@ -150,6 +160,86 @@ export class CnkiProvider implements SearchProvider {
       }
     }
     return [...deduped.values()];
+  }
+
+  private async searchByAuthorAffiliationRescue(
+    request: SearchRequest,
+    context: ProviderContext
+  ): Promise<ArticleRecord[]> {
+    const candidates = await searchCrossrefAuthorAffiliationCandidates(
+      request,
+      context,
+      Math.max(request.maxResults * 4, 10)
+    );
+    if (!candidates.length) {
+      return [];
+    }
+
+    const httpOnlyContext: ProviderContext = {
+      ...context,
+      config: {
+        ...context.config,
+        cnkiRuntimeMode: "http_only"
+      }
+    };
+
+    const rescued: ArticleRecord[] = [];
+    for (const candidate of candidates.slice(0, 6)) {
+      const candidateDoi = normalizeDoi(candidate.DOI);
+      const candidateTitle = normalizeWhitespace(candidate.title?.[0]);
+      const doiMatches = candidateDoi
+        ? await this.searchCnkiInternal(
+            {
+              ...request,
+              query: candidateDoi,
+              mode: "doi",
+              expandBilingual: false,
+              enrichResults: false
+            },
+            httpOnlyContext
+          )
+        : [];
+
+      rescued.push(...doiMatches);
+      if (cnkiRecordsContainCandidate(doiMatches, candidate)) {
+        continue;
+      }
+
+      if (candidateTitle) {
+        rescued.push(
+          ...(await this.searchCnkiInternal(
+            {
+              ...request,
+              query: candidateTitle,
+              mode: "title",
+              expandBilingual: false,
+              enrichResults: false
+            },
+            httpOnlyContext
+          ))
+        );
+      }
+    }
+
+    return rankCnkiSearchItems(request, mergeArticleRecordList(rescued)).slice(
+      0,
+      request.maxResults
+    );
+  }
+
+  private async searchCnkiInternal(
+    request: SearchRequest,
+    context: ProviderContext
+  ): Promise<ArticleRecord[]> {
+    try {
+      const { html, baseUrl } = await fetchCnkiSearchHtmlWithRequest(request, context);
+      return rankCnkiSearchItems(request, parseCnkiSearchHtml(html, baseUrl)).slice(
+        0,
+        request.maxResults
+      );
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -1025,6 +1115,21 @@ function cleanCnkiTitle(title: string): string {
 
 function cleanCnkiAuthor(author: string): string {
   return normalizeWhitespace(author.replace(/\d+$/, ""));
+}
+
+function cnkiRecordsContainCandidate(items: ArticleRecord[], candidate: CrossrefItem): boolean {
+  const candidateDoi = normalizeDoi(candidate.DOI);
+  const candidateTitle = normalizeWhitespace(candidate.title?.[0]).toLowerCase();
+
+  return items.some((item) => {
+    if (candidateDoi && item.doi && normalizeDoi(item.doi) === candidateDoi) {
+      return true;
+    }
+    return Boolean(
+      candidateTitle &&
+        normalizeWhitespace(item.title).toLowerCase() === candidateTitle
+    );
+  });
 }
 
 function guessDownloadFormat(

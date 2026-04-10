@@ -34,6 +34,7 @@ export interface SearchFilters {
   yearFrom?: number;
   yearTo?: number;
   journal?: string;
+  institution?: string;
   volume?: string;
   issue?: string;
   resourceCode?: string;

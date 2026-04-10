@@ -7,6 +7,7 @@ import {
 } from "../types.js";
 import { normalizeDoi, normalizeWhitespace } from "../utils/text.js";
 import { mergeMetadataRecords, applyUnpaywall, buildCrossrefSearchUrl as buildGenericCrossrefSearchUrl, buildOpenAlexSearchUrl as buildGenericOpenAlexSearchUrl, CrossrefItem, CrossrefListResponse, CrossrefSingleResponse, OpenAlexResponse, OpenAlexWork, UnpaywallResponse, mapCrossrefItemToRecord, mapOpenAlexItemToRecord, matchIssn, matchJournalName, normalizeOpenAccessFormat } from "./open-metadata.js";
+import { searchCrossrefAuthorAffiliationCandidates } from "./author-affiliation-rescue.js";
 
 const GEOPHYSICS_PATTERNS = [/^geophysics$/i];
 
@@ -17,7 +18,7 @@ export class GeophysicsProvider implements SearchProvider {
     request: SearchRequest,
     context: ProviderContext
   ): Promise<ProviderSearchResult> {
-    const cacheKey = JSON.stringify({ version: 3, request });
+    const cacheKey = JSON.stringify({ version: 4, request });
     const cached = await context.cache.get<ProviderSearchResult>(
       "search/geophysics",
       cacheKey
@@ -159,12 +160,38 @@ export class GeophysicsProvider implements SearchProvider {
       throw new Error("GEOPHYSICS metadata sources are temporarily unavailable.");
     }
 
-    const merged = mergeMetadataRecords([...crossrefItems, ...openAlexItems]).slice(
+    const rescueItems = await this.searchAuthorAffiliationRescue(
+      request,
+      context,
+      limit
+    );
+
+    const merged = mergeMetadataRecords([
+      ...rescueItems,
+      ...crossrefItems,
+      ...openAlexItems
+    ]).slice(
       0,
       request.maxResults
     );
 
     return Promise.all(merged.map((record) => this.enrichRecord(record, context)));
+  }
+
+  private async searchAuthorAffiliationRescue(
+    request: SearchRequest,
+    context: ProviderContext,
+    limit: number
+  ): Promise<ArticleRecord[]> {
+    const items = await searchCrossrefAuthorAffiliationCandidates(
+      request,
+      context,
+      limit
+    );
+
+    return items
+      .filter((item) => isGeophysicsItem(item, context.config.geophysicsIssn))
+      .map(mapCrossrefItem);
   }
 
   private async searchCrossref(

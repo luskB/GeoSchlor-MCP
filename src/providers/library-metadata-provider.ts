@@ -24,6 +24,7 @@ import {
   OpenAlexWork,
   UnpaywallResponse
 } from "./open-metadata.js";
+import { searchCrossrefAuthorAffiliationCandidates } from "./author-affiliation-rescue.js";
 
 export interface MetadataLibraryProviderOptions {
   id: SourceId;
@@ -229,12 +230,38 @@ export class MetadataLibraryProvider implements SearchProvider {
       throw new Error(`${this.options.displayName} metadata sources are temporarily unavailable.`);
     }
 
-    const merged = mergeMetadataRecords([...crossrefItems, ...openAlexItems]).slice(
+    const rescueItems = await this.searchAuthorAffiliationRescue(
+      request,
+      context,
+      limit
+    );
+
+    const merged = mergeMetadataRecords([
+      ...rescueItems,
+      ...crossrefItems,
+      ...openAlexItems
+    ]).slice(
       0,
       request.maxResults
     );
 
     return Promise.all(merged.map((record) => this.enrichRecord(record, context)));
+  }
+
+  private async searchAuthorAffiliationRescue(
+    request: SearchRequest,
+    context: ProviderContext,
+    limit: number
+  ): Promise<ArticleRecord[]> {
+    const items = await searchCrossrefAuthorAffiliationCandidates(
+      request,
+      context,
+      limit
+    );
+
+    return items
+      .filter((item) => this.matchesCrossrefItem(item))
+      .map((item) => this.mapCrossrefItem(item));
   }
 
   private async searchCrossref(

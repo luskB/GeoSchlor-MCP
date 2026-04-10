@@ -7,7 +7,7 @@ const SPWLA_OPTIONS: MetadataLibraryProviderOptions = {
   id: "spwla",
   displayName: "SPWLA",
   cacheNamespace: "search/spwla",
-  cacheVersion: 2,
+  cacheVersion: 3,
   doiPrefixes: ["10.30632/"],
   publisherPattern: /(society of petrophysicists and well log analysts|spwla)/i,
   journalPatterns: [/^petrophysics\b/i, /\bspwla\b/i, /logging symposium/i],
